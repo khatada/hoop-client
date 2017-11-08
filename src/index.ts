@@ -3,7 +3,7 @@ import superagent = require("superagent");
 
 const channel = "test";
 const base = "http://localhost:3000/"
-const ws = new WebSocket("ws://localhost:8080");
+const ws = new WebSocket("wss://hoop-server.herokuapp.com/");
 
 export type Method = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -25,7 +25,7 @@ export interface TunnelMessage{
 
 
 ws.on("open", ()=>{
-    console.log("open");
+    console.log("open", ws.url);
     const setName:TunnelMessage = {
         command: "set-name",
         channel: channel,
