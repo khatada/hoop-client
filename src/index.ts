@@ -1,9 +1,14 @@
+"use strict"
+
 import WebSocket = require("ws");
 import superagent = require("superagent");
+import HttpsProxyAgent = require("https-proxy-agent");
 
 const channel = "test";
-const base = "http://localhost:3000/"
-const ws = new WebSocket("wss://hoop-server.herokuapp.com/");
+const base = "http://localhost:3000/";
+const proxy = process.env.http_proxy;
+const agent = new HttpsProxyAgent(proxy);
+const ws = new WebSocket("wss://hoop-server.herokuapp.com/", {agent: agent});
 
 export type Method = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -23,9 +28,9 @@ export interface TunnelMessage{
     error?: any;
 }
 
-
-ws.on("open", ()=>{
-    console.log("open", ws.url);
+let timer = null;
+function sendChannelName(ws: WebSocket, channel: string){
+    console.log(new Date(), `Send set-name command. channel=${channel}`);
     const setName:TunnelMessage = {
         command: "set-name",
         channel: channel,
@@ -33,11 +38,25 @@ ws.on("open", ()=>{
         session: null
     };
     ws.send(JSON.stringify(setName));
+}
+
+function repeateSendChannelName(ws: WebSocket, channel: string){
+    clearTimeout(timer);
+    sendChannelName(ws, channel);
+    timer = setTimeout(repeateSendChannelName.bind(this, ws, channel), 5000);
+}
+
+
+ws.on("open", ()=>{
+    console.log("open", ws.url);
+    repeateSendChannelName(ws, channel);
 });
 
-ws.on("close", ()=>{
-    console.log("close");
-})
+ws.on("close", (code, reason)=>{
+    console.log("close", reason);
+    clearTimeout(timer);
+    timer = null;
+});
 
 function ignoreHeader(header: string): boolean{
     const lower = header.toLowerCase();
@@ -92,13 +111,13 @@ ws.on("message", (message)=>{
                 ws.send(JSON.stringify(reply));
             }else{
                 console.log(error);
-                const reply: TunnelMessage = {
+                const errorReply: TunnelMessage = {
                     command: "error",
                     channel: channel,
                     session: session,
                     error: String(error)
                 };
-                ws.send(JSON.stringify(reply));
+                ws.send(JSON.stringify(errorReply));
             }
         })
     }
