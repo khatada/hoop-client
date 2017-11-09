@@ -1,11 +1,16 @@
+"use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const WebSocket = require("ws");
 const superagent = require("superagent");
+const HttpsProxyAgent = require("https-proxy-agent");
 const channel = "test";
 const base = "http://localhost:3000/";
-const ws = new WebSocket("wss://hoop-server.herokuapp.com/");
-ws.on("open", () => {
-    console.log("open", ws.url);
+const proxy = process.env.http_proxy;
+const agent = new HttpsProxyAgent(proxy);
+const ws = new WebSocket("wss://hoop-server.herokuapp.com/", { agent: agent });
+let timer = null;
+function sendChannelName(ws, channel) {
+    console.log(new Date(), `Send set-name command. channel=${channel}`);
     const setName = {
         command: "set-name",
         channel: channel,
@@ -13,9 +18,20 @@ ws.on("open", () => {
         session: null
     };
     ws.send(JSON.stringify(setName));
+}
+function repeateSendChannelName(ws, channel) {
+    clearTimeout(timer);
+    sendChannelName(ws, channel);
+    timer = setTimeout(repeateSendChannelName.bind(this, ws, channel), 5000);
+}
+ws.on("open", () => {
+    console.log("open", ws.url);
+    repeateSendChannelName(ws, channel);
 });
-ws.on("close", () => {
-    console.log("close");
+ws.on("close", (code, reason) => {
+    console.log("close", reason);
+    clearTimeout(timer);
+    timer = null;
 });
 function ignoreHeader(header) {
     const lower = header.toLowerCase();
@@ -74,13 +90,13 @@ ws.on("message", (message) => {
             }
             else {
                 console.log(error);
-                const reply = {
+                const errorReply = {
                     command: "error",
                     channel: channel,
                     session: session,
                     error: String(error)
                 };
-                ws.send(JSON.stringify(reply));
+                ws.send(JSON.stringify(errorReply));
             }
         });
     }
