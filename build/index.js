@@ -6,33 +6,6 @@ const HttpsProxyAgent = require("https-proxy-agent");
 const channel = "test";
 const base = "http://localhost:3000/";
 const proxy = process.env.http_proxy;
-const agent = new HttpsProxyAgent(proxy);
-const ws = new WebSocket("wss://hoop-server.herokuapp.com/", { agent: agent });
-let timer = null;
-function sendChannelName(ws, channel) {
-    console.log(new Date(), `Send set-name command. channel=${channel}`);
-    const setName = {
-        command: "set-name",
-        channel: channel,
-        data: null,
-        session: null
-    };
-    ws.send(JSON.stringify(setName));
-}
-function repeateSendChannelName(ws, channel) {
-    clearTimeout(timer);
-    sendChannelName(ws, channel);
-    timer = setTimeout(repeateSendChannelName.bind(this, ws, channel), 5000);
-}
-ws.on("open", () => {
-    console.log("open", ws.url);
-    repeateSendChannelName(ws, channel);
-});
-ws.on("close", (code, reason) => {
-    console.log("close", reason);
-    clearTimeout(timer);
-    timer = null;
-});
 function ignoreHeader(header) {
     const lower = header.toLowerCase();
     const ignore = ["connection", "host", "content-length"];
@@ -55,49 +28,111 @@ function createRequest(method, url) {
         return superagent.head(url);
     }
 }
-ws.on("message", (message) => {
-    const json = JSON.parse(message.toString());
-    const session = json.session;
-    if (json.command === "request") {
-        console.log(json);
-        const request = createRequest(json.data.method, base + json.data.path);
-        Object.keys(json.data.headers).forEach((key) => {
-            if (ignoreHeader(key)) {
-                // do nothing
-            }
-            else {
-                request.set(key, json.data.headers[key]);
-            }
-        });
-        if (json.data.body) {
-            request.send(json.data.body);
-        }
-        request.end((error, res) => {
-            if (res) {
-                const reply = {
-                    command: "response",
-                    channel: channel,
-                    session: session,
-                    data: {
-                        method: json.data.method,
-                        body: res.body,
-                        path: json.data.path,
-                        headers: res.header,
-                        status: res.status
-                    }
-                };
-                ws.send(JSON.stringify(reply));
-            }
-            else {
-                console.log(error);
-                const errorReply = {
-                    command: "error",
-                    channel: channel,
-                    session: session,
-                    error: String(error)
-                };
-                ws.send(JSON.stringify(errorReply));
-            }
-        });
+class TunnelClient {
+    constructor(channel, host, proxy) {
+        this.needsReconnect = true;
+        this.reconnectTimer = null;
+        this.channel = "test";
+        this.sendSetNameTimer = null;
+        this.host = host;
+        this.proxy = proxy;
+        this.channel = channel;
+        this.onOpen = this.onOpen.bind(this);
+        this.onClose = this.onClose.bind(this);
+        this.onMessage = this.onMessage.bind(this);
+        this.connect();
     }
-});
+    dispose() {
+        this.needsReconnect = false;
+        this.ws.close();
+    }
+    connect() {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+        const agent = new HttpsProxyAgent(this.proxy);
+        this.ws = new WebSocket(this.host, { agent: agent });
+        this.ws.on("open", this.onOpen);
+        this.ws.on("close", this.onClose);
+        this.ws.on("message", this.onMessage);
+    }
+    onOpen() {
+        console.log(new Date(), "Websocket connection open.");
+        this.repeateSendChannelName();
+    }
+    onClose(code, reason) {
+        clearTimeout(this.sendSetNameTimer);
+        if (this.ws) {
+            this.ws.removeAllListeners();
+            this.ws = null;
+        }
+        if (this.needsReconnect && !this.reconnectTimer) {
+            this.reconnectTimer = setTimeout(this.connect.bind(this), 3000);
+        }
+    }
+    onMessage(message) {
+        const json = JSON.parse(message.toString());
+        const session = json.session;
+        if (json.command === "request") {
+            console.log(json.data);
+            const url = base + json.data.path;
+            const request = createRequest(json.data.method, url);
+            Object.keys(json.data.headers).forEach((header) => {
+                if (ignoreHeader(header)) {
+                    // do nothing
+                }
+                else {
+                    request.set(header, json.data.headers[header]);
+                }
+            });
+            if (json.data.body) {
+                request.send(json.data.body);
+            }
+            request.end((error, res) => {
+                if (res) {
+                    const reply = {
+                        command: "response",
+                        channel: channel,
+                        session: session,
+                        data: {
+                            method: json.data.method,
+                            body: res.body,
+                            path: json.data.path,
+                            headers: res.header,
+                            status: res.status
+                        }
+                    };
+                    console.log(reply);
+                    this.ws.send(JSON.stringify(reply));
+                }
+                else {
+                    console.log(error);
+                    const errorReply = {
+                        command: "error",
+                        channel: channel,
+                        session: session,
+                        error: String(error)
+                    };
+                    console.log(errorReply);
+                    this.ws.send(JSON.stringify(errorReply));
+                }
+            });
+        }
+    }
+    sendChannelName() {
+        console.log(new Date(), `Send set-name command. channel=${channel}`);
+        const setName = {
+            command: "set-name",
+            channel: this.channel,
+            data: null,
+            session: null
+        };
+        this.ws.send(JSON.stringify(setName));
+    }
+    repeateSendChannelName() {
+        clearTimeout(this.sendSetNameTimer);
+        this.sendChannelName();
+        this.sendSetNameTimer = setTimeout(this.repeateSendChannelName.bind(this), 5000);
+    }
+}
+exports.TunnelClient = TunnelClient;
+const tunnel = new TunnelClient("test", "wss://hoop-server.herokuapp.com/", proxy);
