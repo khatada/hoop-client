@@ -127,16 +127,14 @@ export class TunnelClient {
 
     private onMessage(data: Buffer): void {
         try {
-            console.log(data);
             const idBuffer = data.slice(0, TunnelClient.MESSAGE_ID_HEADER);
             const commandBuffer = data.slice(TunnelClient.MESSAGE_ID_HEADER, TunnelClient.MESSAGE_ID_HEADER + TunnelClient.MESSAGE_COMMAND_HEADER);
             const id = idBuffer.toString("utf-8", 0, TunnelClient.MESSAGE_ID_HEADER);
             const command = commandBuffer.toString();
-            console.log(`Tunnel message. id=${id} command=${command}`);
+            // console.log(`Tunnel message. id=${id} command=${command}`);
             if (command === "h") {
                 const headerBuffer = data.slice(TunnelClient.MESSAGE_ID_HEADER + TunnelClient.MESSAGE_COMMAND_HEADER);
                 const header = JSON.parse(headerBuffer.toString());
-                console.log(header);
                 const headers = {};
                 Object.keys(header.headers).forEach(name => {
                     if(!ignoreHeader(name)){
@@ -146,32 +144,32 @@ export class TunnelClient {
                 const options: request.CoreOptions = {
                     method: header.method,
                     headers,
-                    proxy: null, timeout: 30000
+                    proxy: null,
+                    timeout: 30000
                 };
                 const targetURL = this.target + header.path + (header.query ? `?${header.query}` : "");
-                console.log(targetURL);
                 this.request[id] = request(targetURL, options);
                 this.request[id].on("response", (res) => {
                     const commandBuffer = new Buffer("h");
                     const header = JSON.stringify({headers: res.headers, status: res.statusCode});
                     const message = Buffer.concat([idBuffer, commandBuffer, new Buffer(header)]);
-                    this.queueSend(message);
+                    this.sendToServer(message);
                 });
                 this.request[id].on("data", (data: Buffer) => {
                     const commandBuffer = new Buffer("s");
                     const message = Buffer.concat([idBuffer, commandBuffer, data]);
-                    this.queueSend(message);
+                    this.sendToServer(message);
                 });
                 this.request[id].on("end", () => {
                     const commandBuffer = new Buffer("e");
                     const message = Buffer.concat([idBuffer, commandBuffer]);
-                    this.queueSend(message);
+                    this.sendToServer(message);
                     delete this.request[id];
                 });
                 this.request[id].on("error", () => {
                     const commandBuffer = new Buffer("a");
                     const message = Buffer.concat([idBuffer, commandBuffer]);
-                    this.queueSend(message);
+                    this.sendToServer(message);
                     delete this.request[id];
                 });
             } else if (command === "s") {
@@ -198,7 +196,7 @@ export class TunnelClient {
         console.log(new Date(), `Send heart beat. channel=${channel}`);
         if (this.ws) {
             const id = uniqueId(TunnelClient.MESSAGE_ID_HEADER);
-            this.queueSend(new Buffer(id));
+            this.sendToServer(new Buffer(id));
         }
     }
 
@@ -209,31 +207,16 @@ export class TunnelClient {
         this.heartBeatTimer = setTimeout(this.repeatSendHeartBeat.bind(this), this.heartBeatInterval);
     }
 
-    private queueSend(buffer: Buffer): void {
-        this.queue.push(buffer);
-        this.sendToServer();
-    }
-
-    private sendToServer(): void {
+    private sendToServer(buffer: Buffer): void {
         if (this.ws) {
-            if (this.isSending) {
-                // do nothing
-            } else if (this.queue.length) {
-                this.isSending = true;
-                const head = this.queue.shift();
-                this.ws.send(head, (error) => {
-                    this.isSending = false;
-                    if (error) {
-                        this.queue = [];
-                        console.error(error);
-                    } else {
-                        this.sendToServer();
+            this.ws.send(buffer, (error) => {
+                if (error) {
+                    console.error(error);
+                    if (this.ws) {
+                        this.ws.close();
                     }
-                });
-            }
-        } else {
-            this.isSending = false;
-            this.queue = [];
+                }
+            });
         }
     }
 }
